@@ -1,6 +1,4 @@
 from flask import Flask, request, jsonify
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics.pairwise import cosine_similarity
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -22,9 +20,12 @@ def normalize_diff(data):
     """Normalize data by calculating percentage change"""
     return (data.pct_change().fillna(0) + 1).values[1:]  # Remove the first element (NaN)
 
-def get_cosine_similarity(a, b):
-    """Calculate cosine similarity between two arrays"""
-    return cosine_similarity(a.reshape(1, -1), b.reshape(1, -1))[0][0]
+def custom_cosine_similarity(a, b):
+    """Calculate cosine similarity between two arrays."""
+    dot_product = np.dot(a, b)
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    return dot_product / (norm_a * norm_b)
 
 def find_consecutive_patterns(sample_data, sample_ema, historical_data, historical_ema,
                               sample_volume=None, historical_volume=None, include_volume=False):
@@ -42,12 +43,12 @@ def find_consecutive_patterns(sample_data, sample_ema, historical_data, historic
         historical_segment = historical_data.iloc[i:i + input_size]
         historical_ema_segment = historical_ema.iloc[i:i + input_size]
 
-        price_similarity = get_cosine_similarity(sample_price_norm, normalize_diff(historical_segment))
-        ema_similarity = get_cosine_similarity(sample_ema_norm, normalize_diff(historical_ema_segment))
+        price_similarity = custom_cosine_similarity(sample_price_norm, normalize_diff(historical_segment))
+        ema_similarity = custom_cosine_similarity(sample_ema_norm, normalize_diff(historical_ema_segment))
 
         if include_volume and historical_volume is not None:
             historical_volume_segment = historical_volume.iloc[i:i + input_size]
-            volume_similarity = get_cosine_similarity(sample_volume_norm, normalize_diff(historical_volume_segment))
+            volume_similarity = custom_cosine_similarity(sample_volume_norm, normalize_diff(historical_volume_segment))
             average_similarity = np.mean([price_similarity, ema_similarity, volume_similarity])
         else:
             average_similarity = np.mean([price_similarity, ema_similarity])
