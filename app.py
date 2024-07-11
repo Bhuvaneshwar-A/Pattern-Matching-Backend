@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from flask import Flask, request, jsonify
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics.pairwise import cosine_similarity
 import yfinance as yf
@@ -6,47 +6,25 @@ import pandas as pd
 import numpy as np
 from typing import List
 from datetime import datetime, date
-from pydantic import BaseModel
-import streamlit 
 
-app = FastAPI()
-
-
-class StockDataRequest(BaseModel):
-    ticker: str
-    start_date: date
-    end_date: date
-    sample_data: List[float]
-    ema_period: int = 14
-    include_volume: bool = False
-
-
-class MatchResult(BaseModel):
-    start_date: datetime
-    end_date: datetime
-    similarity: float
-
+app = Flask(__name__)
 
 def fetch_historical_data(ticker: str, start_date: date, end_date: date):
     """Fetches historical price and volume data from Yahoo Finance."""
     data = yf.download(ticker, start=start_date, end=end_date)
     return data[['Close', 'Volume']]
 
-
 def calculate_ema(data, period):
     """Calculate Exponential Moving Average"""
     return data.ewm(span=period, adjust=False).mean()
-
 
 def normalize_diff(data):
     """Normalize data by calculating percentage change"""
     return (data.pct_change().fillna(0) + 1).values[1:]  # Remove the first element (NaN)
 
-
 def get_cosine_similarity(a, b):
     """Calculate cosine similarity between two arrays"""
     return cosine_similarity(a.reshape(1, -1), b.reshape(1, -1))[0][0]
-
 
 def find_consecutive_patterns(sample_data, sample_ema, historical_data, historical_ema,
                               sample_volume=None, historical_volume=None, include_volume=False):
@@ -79,27 +57,34 @@ def find_consecutive_patterns(sample_data, sample_ema, historical_data, historic
     similarities.sort(key=lambda x: -x[2])
     return similarities[:5]  # Return top 5 matches
 
-
-@app.post("/search_data", response_model=List[MatchResult])
-async def search_data(request: StockDataRequest):
+@app.route('/search_data', methods=['POST'])
+def search_data():
     try:
+        data = request.json
+        ticker = data['ticker']
+        start_date = datetime.strptime(data['start_date'], '%Y-%m-%d').date()
+        end_date = datetime.strptime(data['end_date'], '%Y-%m-%d').date()
+        sample_data = data['sample_data']
+        ema_period = data.get('ema_period', 14)
+        include_volume = data.get('include_volume', False)
+
         # Fetch historical data from yfinance
-        historical_data = fetch_historical_data(request.ticker, request.start_date, request.end_date)
+        historical_data = fetch_historical_data(ticker, start_date, end_date)
 
         if historical_data.empty:
-            raise HTTPException(status_code=404, detail="No data found for this ticker!")
+            return jsonify({"error": "No data found for this ticker!"}), 404
 
         # Calculate EMA for historical data
-        historical_ema = calculate_ema(historical_data['Close'], request.ema_period)
+        historical_ema = calculate_ema(historical_data['Close'], ema_period)
 
         # Prepare sample data
-        sample_data = pd.Series(request.sample_data)
-        sample_ema = calculate_ema(sample_data, request.ema_period)
+        sample_data = pd.Series(sample_data)
+        sample_ema = calculate_ema(sample_data, ema_period)
 
         # Prepare volume data if included
         sample_volume = None
         historical_volume = None
-        if request.include_volume:
+        if include_volume:
             # For this example, we'll use random data for sample volume
             # In a real scenario, you'd want to provide this from the frontend
             sample_volume = pd.Series(np.random.randn(len(sample_data)))
@@ -108,22 +93,20 @@ async def search_data(request: StockDataRequest):
         top_matches = find_consecutive_patterns(sample_data, sample_ema,
                                                 historical_data['Close'], historical_ema,
                                                 sample_volume, historical_volume,
-                                                request.include_volume)
+                                                include_volume)
 
         results = []
         for start, end, similarity in top_matches:
             match_dates = historical_data.index[start:end + 1]
-            results.append(MatchResult(
-                start_date=match_dates[0],
-                end_date=match_dates[-1],
-                similarity=similarity
-            ))
+            results.append({
+                "start_date": match_dates[0].isoformat(),
+                "end_date": match_dates[-1].isoformat(),
+                "similarity": float(similarity)
+            })
 
-        return results
+        return jsonify(results)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    app.run(debug=True)
